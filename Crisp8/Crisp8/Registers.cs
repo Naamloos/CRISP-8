@@ -22,11 +22,6 @@ namespace Crisp8
         public ushort PC;
 
         /// <summary>
-        /// Register SP (Stack pointer), used by the CPU to point to the topmost level of the stack.
-        /// </summary>
-        public byte SP;
-
-        /// <summary>
         /// Delay Timer register.
         /// </summary>
         public byte DT;

@@ -6,6 +6,10 @@ namespace Crisp8.Interfaces
 {
     public interface IScreen
     {
-        void Draw(byte x, byte y, byte[] data);
+        bool Pixel(int x, int y);
+
+        void Clear();
+
+        void Render();
     }
 }

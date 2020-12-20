@@ -20,34 +20,45 @@ namespace Crisp8
 
         private Stopwatch timer;
         private Random rng;
+        private bool killed = false;
 
         public Chip8(byte[] rom, IScreen screen, ISoundHandler sound, IKeyboard keyboard)
         {
-            this.ram = rom;
+            registers.PC = 512; // Most chip-8 programs start at address 0x200 (512)
+            rom.CopyTo(ram, 512);
 
             this.screen = screen;
             this.sound = sound;
             this.keyboard = keyboard;
             this.registers.Stack = new Stack<ushort>();
+            this.registers.V = new byte[16];
             this.rng = new Random();
         }
 
         public void Start()
         {
+            if (killed)
+            {
+                throw new Exception("Create a new Emulator class to restart! This one has been killed.");
+            }
             timer = new Stopwatch();
             timer.Start();
             // load default font into interpreter ram
             FontLoader.GetDefaultFont().CopyTo(ram, 0);
 
-            registers.PC = 0x200; // Most chip-8 programs start at address 0x200 (512)
-            while (true)
+            while (!killed)
             {
-                if(timer.ElapsedMilliseconds == 1000 / 60)
+                if(timer.ElapsedMilliseconds > 1000 / 60)
                 {
                     tick();
-                    timer.Reset();
+                    timer.Restart();
                 }
             }
+        }
+
+        public void Kill()
+        {
+            this.killed = true;
         }
 
         private void tick()
@@ -56,6 +67,7 @@ namespace Crisp8
             if(registers.ST > 0)
             {
                 // buzz
+                sound.Beep();
                 registers.ST--;
             }
             if(registers.DT > 0)
@@ -65,8 +77,10 @@ namespace Crisp8
 
             // read instruction
             // All instructions are 2 bytes long
-            ushort instruction = BitConverter.ToUInt16( new byte[2] { ram[pointer], ram[pointer + 1] }, 0);
+            ushort instruction = BitConverter.ToUInt16( new byte[2] { ram[pointer + 1], ram[pointer] }, 0);
             executeInstruction(instruction);
+            screen.Render();
+            registers.PC += 2;
         }
 
         private void executeInstruction(ushort instruction)
@@ -75,75 +89,90 @@ namespace Crisp8
             // bitmasking time! :D ( D: )
 
             // The first nibble is never variable, we can just throw that into a switch
-            switch ((ushort)(instruction & 0x0FFF))
+            var mask = (instruction & 0xF000);
+            var opcode = (byte)(mask >> 12);
+            switch (opcode)
             {
-                case 0x0000:
+                case 0x0:
                     // nible 0 is 0
                     instruction_0(instruction);
                     break;
 
-                case 0x1000:
+                case 0x1:
                     // nible 0 is 1
+                    instruction_1(instruction);
                     break;
 
-                case 0x2000:
+                case 0x2:
                     // nible 0 is 2
+                    instruction_2(instruction);
                     break;
 
-                case 0x3000:
+                case 0x3:
                     // nible 0 is 3
+                    instruction_3(instruction);
                     break;
 
-                case 0x4000:
+                case 0x4:
                     // nible 0 is 4
+                    instruction_4(instruction);
                     break;
 
-                case 0x5000:
+                case 0x5:
                     // nible 0 is 5
+                    instruction_5(instruction);
                     break;
 
-                case 0x6000:
+                case 0x6:
                     // nible 0 is 6
+                    instruction_6(instruction);
                     break;
 
-                case 0x7000:
+                case 0x7:
                     // nible 0 is 7
+                    instruction_7(instruction);
                     break;
 
-                case 0x8000:
+                case 0x8:
                     // nible 0 is 8
+                    instruction_8(instruction);
                     break;
 
-                case 0x9000:
+                case 0x9:
                     // nible 0 is 9
+                    instruction_9(instruction);
                     break;
 
-                case 0xA000:
+                case 0xA:
                     // nible 0 is A
+                    instruction_A(instruction);
                     break;
 
-                case 0xB000:
+                case 0xB:
                     // nible 0 is B
+                    instruction_B(instruction);
                     break;
 
-                case 0xC000:
+                case 0xC:
                     // nible 0 is C
+                    instruction_C(instruction);
                     break;
 
-                case 0xD000:
+                case 0xD:
                     // nible 0 is D
+                    instruction_D(instruction);
                     break;
 
-                case 0xE000:
+                case 0xE:
                     // nible 0 is E
+                    instruction_E(instruction);
                     break;
 
-                case 0xF000:
+                case 0xF:
                     // nible 0 is F
+                    instruction_F(instruction);
                     break;
             }
-
-            registers.PC++;
         }
 
         private void instruction_0(ushort instruction)
@@ -154,15 +183,16 @@ namespace Crisp8
             switch (instruction)
             {
                 case 0x00E0:
-                    // TODO Clear display
+                    screen.Clear();
                     break;
 
                 case 0x00EE:
-                    // TODO Return from subroutine
+                    registers.PC = registers.Stack.Pop();
                     break;
 
-                default:
-                    unknownInstruction(instruction);
+                case 0x0000:
+                    this.Kill();
+                    // uh, there is no more program to execute lol
                     break;
             }
         }
@@ -171,16 +201,15 @@ namespace Crisp8
         {
             // 1 only has one instruction, jump to location.
             // program counter gets set to the last 3 nibbles.
-            registers.PC = (ushort)(instruction & 0xF000);
+            registers.PC = (ushort)(instruction & 0xFFF);
         }
 
         private void instruction_2(ushort instruction)
         {
             // Calls subroutine at nnn (last 3 nibbles)
             // The interpreter increments the stack pointer, then puts the current PC on the top of the stack. The PC is then set to nnn.
-            registers.SP++;
             registers.Stack.Push(registers.PC);
-            registers.PC = (ushort)(instruction & 0xF000);
+            registers.PC = (ushort)(instruction & 0xFFF);
         }
 
         private void instruction_3(ushort instruction)
@@ -188,12 +217,12 @@ namespace Crisp8
             // 3xkk
             // Skip next instruction if Vx = kk.
             // The interpreter compares register Vx to kk, and if they are equal, increments the program counter by 2.
-            var register = ((instruction & 0xF0FF) >> 2);
+            var x = ((instruction & 0xF00) >> 8);
 
-            if(registers.V[register] == (byte)(instruction & 0xFF00))
+            if(registers.V[x] == (byte)(instruction & 0xFF))
             {
                 // PC always gets incremented so we just increment it once extra to increment it twice.
-                this.registers.PC++;
+                this.registers.PC += 2;
             }
         }
 
@@ -202,12 +231,12 @@ namespace Crisp8
             // 4xkk - SNE Vx, byte
             // Skip next instruction if Vx != kk.
             // The interpreter compares register Vx to kk, and if they are not equal, increments the program counter by 2.
-            var register = ((instruction & 0xF0FF) >> 2);
+            var x = ((instruction & 0xF00) >> 8);
 
-            if (registers.V[register] != (byte)(instruction & 0xFF00))
+            if (registers.V[x] != (byte)(instruction & 0xFF))
             {
                 // PC always gets incremented so we just increment it once extra to increment it twice.
-                this.registers.PC++;
+                this.registers.PC += 2;
             }
         }
 
@@ -217,12 +246,12 @@ namespace Crisp8
             // Skip next instruction if Vx = Vy.
             // The interpreter compares register Vx to register Vy, and if they are equal, increments the program counter by 2.
 
-            var x = ((instruction & 0xF0FF) >> 2);
-            var y = ((instruction & 0xFF0F) >> 1);
+            var x = ((instruction & 0xF00) >> 8);
+            var y = ((instruction & 0xF0) >> 4);
 
             if(registers.V[x] == registers.V[y])
             {
-                this.registers.PC++;
+                this.registers.PC += 2;
             }
         }
 
@@ -232,8 +261,8 @@ namespace Crisp8
             // Set Vx = kk.
             // The interpreter puts the value kk into register Vx.
 
-            var x = ((instruction & 0xF0FF) >> 2);
-            var kk = ((instruction & 0xFF00));
+            var x = ((instruction & 0xF00) >> 8);
+            var kk = ((instruction & 0xFF));
 
             registers.V[x] = (byte)kk;
         }
@@ -244,8 +273,8 @@ namespace Crisp8
             // Set Vx = Vx + kk.
             // Adds the value kk to the value of register Vx, then stores the result in Vx.
 
-            var x = ((instruction & 0xF0FF) >> 2);
-            var kk = ((instruction & 0xFF00));
+            var x = ((instruction & 0xF00) >> 8);
+            var kk = ((instruction & 0xFF));
 
             registers.V[x] += (byte)kk;
         }
@@ -254,111 +283,90 @@ namespace Crisp8
         {
             // 8xyi
             // a lot of bitwise stuff ig
-            var x = ((instruction & 0xF0FF) >> 2);
-            var y = ((instruction & 0xFF0F) >> 1);
-            var i = (instruction & 0xFFF0);
+            var x = ((instruction & 0x0F00) >> 8);
+            var y = ((instruction & 0x00F0) >> 4);
+            var i = (instruction & 0x000F);
 
             // do operations based on z
             switch (i)
             {
-                case 0x0000:
+                case 0x0:
                     // store Vy in Vx
                     registers.V[x] = registers.V[y];
                     break;
 
-                case 0x0001:
+                case 0x1:
                     // Set Vx = Vx OR Vy.
                     // Performs a bitwise OR on the values of Vx and Vy, then stores the result in Vx.
-                    registers.V[x] = (byte)((int)registers.V[x] | (int)registers.V[y]);
+                    registers.V[x] |= registers.V[y];
                     break;
 
-                case 0x0002:
+                case 0x2:
                     // Set Vx = Vx AND Vy.
                     // Performs a bitwise AND on the values of Vx and Vy, then stores the result in Vx.
-                    registers.V[x] = (byte)((int)registers.V[x] & (int)registers.V[y]);
+                    registers.V[x] &= registers.V[y];
                     break;
 
-                case 0x0003:
+                case 0x3:
                     // XOR
-                    registers.V[x] = (byte)((int)registers.V[x] ^ (int)registers.V[y]);
+                    registers.V[x] ^= registers.V[y];
                     break;
 
-                case 0x0004:
+                case 0x4:
                     // Set Vx = Vx + Vy, set VF = carry.
                     // The values of Vx and Vy are added together. 
                     // If the result is greater than 8 bits (i.e., > 255,) VF is set to 1, otherwise 0.
                     // Only the lowest 8 bits of the result are kept, and stored in Vx.
-                    var res = registers.V[x] + registers.V[y];
+                    var res = (registers.V[x] += registers.V[y]);
 
-                    if (res > 255)
+                    registers.V[0xF] = 0;
+                    if (res > 0xFF)
                     {
-                        registers.V[0x0F] = 1;
+                        registers.V[0xF] = 1;
                     }
 
-                    registers.V[x] = (byte)(res & 0xFFFF0000);
+                    registers.V[x] = res;
                     break;
 
-                case 0x0005:
+                case 0x5:
                     // Set Vx = Vx - Vy, set VF = NOT borrow.
                     // If Vx > Vy, then VF is set to 1, otherwise 0.Then Vy is subtracted from Vx, and the results stored in Vx.
-                    if(registers.V[x] > registers.V[y])
+                    registers.V[0xF] = 0;
+
+                    if (registers.V[x] > registers.V[y])
                     {
-                        registers.V[0x0F] = 1;
-                    }
-                    else
-                    {
-                        registers.V[0x0F] = 0;
+                        registers.V[0xF] = 1;
                     }
 
                     registers.V[x] -= registers.V[y];
                     break;
 
-                case 0x0006:
+                case 0x6:
                     // Set Vx = Vx SHR 1.
                     // If the least - significant bit of Vx is 1, then VF is set to 1, otherwise 0.Then Vx is divided by 2.
-                    if((registers.V[x] & 1) == 1)
-                    {
-                        registers.V[0x0F] = 1;
-                    }
-                    else
-                    {
-                        registers.V[0x0F] = 0;
-                    }
-
-                    registers.V[x] = (byte)(registers.V[x] / 2);
+                    registers.V[0xF] = (byte)(registers.V[x] & 0x1);
+                    registers.V[x] >>= 1;
                     break;
 
-                case 0x0007:
+                case 0x7:
                     // Set Vx = Vy - Vx, set VF = NOT borrow.
                     // If Vy > Vx, then VF is set to 1, otherwise 0.Then Vx is subtracted from Vy, and the results stored in Vx.
 
-                    if(registers.V[y] > registers.V[x])
+                    registers.V[0xF] = 0;
+                    if (registers.V[y] > registers.V[x])
                     {
-                        registers.V[0x0F] = 1;
-                    }
-                    else
-                    {
-                        registers.V[0x0F] = 0;
+                        registers.V[0xF] = 1;
                     }
 
-                    registers.V[y] -= registers.V[x];
+                    registers.V[x] = (byte)(registers.V[y] - registers.V[x]);
                     break;
 
-                case 0x000E:
+                case 0xE:
                     // Set Vx = Vx SHL 1.
                     // If the most - significant bit of Vx is 1, then VF is set to 1, otherwise to 0.Then Vx is multiplied by 2.
 
-                    // same as 0006, but instead we bitshift by 15 to set the MSB at the position of the LSB.
-                    if (((registers.V[x] >> 15) & 1) == 1)
-                    {
-                        registers.V[0x0F] = 1;
-                    }
-                    else
-                    {
-                        registers.V[0x0F] = 0;
-                    }
-
-                    registers.V[x] = (byte)(registers.V[x] * 2);
+                    registers.V[0xF] = (byte)(registers.V[x] & 0x80);
+                    registers.V[x] <<= 1;
                     break;
 
                 default:
@@ -373,13 +381,13 @@ namespace Crisp8
             // Skip next instruction if Vx != Vy.
             // The values of Vx and Vy are compared, and if they are not equal, the program counter is increased by 2.
 
-            var x = ((instruction & 0xF0FF) >> 2);
-            var y = ((instruction & 0xFF0F) >> 1);
+            var x = ((instruction & 0x0F00) >> 8);
+            var y = ((instruction & 0x00F0) >> 4);
 
             if (registers.V[x] != registers.V[y])
             {
                 // increase by 1 because we always increase
-                this.registers.PC++;
+                this.registers.PC += 2;
             }
         }
 
@@ -388,7 +396,7 @@ namespace Crisp8
             // Annn - LD I, addr
             // Set I = nnn.
             // The value of register I is set to nnn.
-            registers.I = (byte)(instruction & 0xF000);
+            registers.I = (ushort)(instruction & 0xFFF);
         }
 
         private void instruction_B(ushort instruction)
@@ -396,7 +404,7 @@ namespace Crisp8
             // Bnnn - JP V0, addr
             // Jump to location nnn + V0.
             // The program counter is set to nnn plus the value of V0.
-            var nnn = (byte)(instruction & 0xF000);
+            var nnn = (ushort)(instruction & 0x0FFF);
             registers.PC = (ushort)(nnn + registers.V[0]);
         }
 
@@ -407,12 +415,11 @@ namespace Crisp8
             // The interpreter generates a random number from 0 to 255, which is then ANDed with the value kk.
             // The results are stored in Vx. See instruction 8xy2 for more information on AND.
 
-            var x = ((instruction & 0xF0FF) >> 2);
-            var kk = ((instruction & 0xFF00));
+            var x = ((instruction & 0x0F00) >> 8);
+            var kk = ((instruction & 0xFF));
 
-            var rngbuffer = new byte[1];
-            rng.NextBytes(rngbuffer);
-            registers.V[x] = (byte)(rngbuffer[0] & kk);
+            byte rand = (byte)(rng.Next(0, int.MaxValue) & 0xFF);
+            registers.V[x] = (byte)(rand & kk);
         }
 
         private void instruction_D(ushort instruction)
@@ -428,38 +435,45 @@ namespace Crisp8
              * it wraps around to the opposite side of the screen.
              * See instruction 8xy3 for more information on XOR, and section 2.4, Display, for more information on the Chip - 8 screen and sprites.
              */
-            var x = ((instruction & 0xF0FF) >> 2);
-            var y = ((instruction & 0xFF0F) >> 1);
+            var x = ((instruction & 0x0F00) >> 8);
+            var y = ((instruction & 0x00F0) >> 4);
+            registers.V[0xF] = 0;
+            var amount = (byte)(instruction & 0x000F);
 
-            var amount = (byte)(instruction & 0xFFF0);
-            var startaddress = registers.I;
-            var data = new byte[amount];
-
-            for(ushort i = 0; i < amount; i++)
+            for (int row = 0; row < amount; row++)
             {
-                data[i] = ram[startaddress + i];
-            }
+                var sprite = this.ram[registers.I + row];
 
-            screen.Draw(registers.V[x], registers.V[y], data);
+                for(var col = 0; col < 8; col++)
+                {
+                    if((sprite & 0x80) > 0)
+                    {
+                        var erased = screen.Pixel(registers.V[x] + col, registers.V[y] + row);
+                        if (erased)
+                            registers.V[0xF] = 1;
+                    }
+                    sprite <<= 1;
+                }
+            }
         }
 
         private void instruction_E(ushort instruction)
         {
-            var x = ((instruction & 0xF0FF) >> 2);
-            var last2nibs = (instruction & 0xFF00);
+            var x = ((instruction & 0x0F00) >> 8);
+            var last2nibs = (instruction & 0x00FF);
 
             if(last2nibs == 0x009E && keyboard.isKeyDown(registers.V[x])
                 || last2nibs == 0x00A1 && keyboard.isKeyUp(registers.V[x]))
             {
                 // every isntruction already increases PC so this would just increase it twice
-                registers.PC++;
+                registers.PC += 2;
             }
         }
 
         private void instruction_F(ushort instruction)
         {
-            var x = ((instruction & 0xF0FF) >> 2);
-            var i = (instruction & 0xFF00);
+            var x = ((instruction & 0x0F00) >> 8);
+            var i = (instruction & 0x00FF);
 
             switch (i)
             {
@@ -498,15 +512,15 @@ namespace Crisp8
                     // the tens digit at location I+1, and the ones digit at location I + 2.
                     var loc = registers.I;
                     var val = registers.V[x];
-                    ram[loc] = (byte)((val & 0x0FF) >> 2);
-                    ram[loc + 1] = (byte)((val & 0xF0F) >> 1);
-                    ram[loc + 2] = (byte)(val & 0xFF0);
+                    ram[loc] = (byte)(val / 100);
+                    ram[loc + 1] = (byte)((val % 100) / 10);
+                    ram[loc + 2] = (byte)(val % 10);
                     break;
 
                 case 0x55:
                     var start = registers.I;
 
-                    for(int index = 0; index < x; index++)
+                    for(int index = 0; index <= x; index++)
                     {
                         ram[start + index] = registers.V[index];
                     }
@@ -515,7 +529,7 @@ namespace Crisp8
                 case 0x65:
                     start = registers.I;
 
-                    for (int index = 0; index < x; index++)
+                    for (int index = 0; index <= x; index++)
                     {
                         registers.V[index] = ram[start + index];
                     }

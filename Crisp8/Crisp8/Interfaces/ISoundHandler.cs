@@ -6,5 +6,6 @@ namespace Crisp8.Interfaces
 {
     public interface ISoundHandler
     {
+        void Beep();
     }
 }
